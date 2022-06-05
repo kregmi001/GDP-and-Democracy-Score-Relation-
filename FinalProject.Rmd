@@ -1,0 +1,234 @@
+---
+title: "Final Project"
+author: "Kushal Regmi"
+date: "5/2/2022"
+output: html_document
+---
+```{r}
+
+library(tidyverse)
+gdpdata <- read.csv("finaldataset.csv")
+```
+
+## Research Question 
+
+Is there a correlation between the democracy score of a country and their relative GDP Per Capita each year from 1960-2018? In addition, how well can we predict the democracy score of a country for a given year with their corresponding gdpperyear? 
+
+
+### Correlation Study
+
+```{r}
+# data cleansing removing columns not of interest 
+nums <- unlist(lapply(gdpdata, is.numeric))  
+
+
+gdp_numeric <- gdpdata[ , nums] 
+
+```
+
+
+```{r}
+sample_corr <- function(data_df) {
+  xv <- data_df$polity2 - mean(data_df$polity2)
+  yv <- data_df$gdppercap - mean(data_df$gdppercap)
+  xy <- xv %*% yv
+  xx <- xv %*% xv
+  yy <- yv %*% yv
+  return(c(xy/sqrt(xx*yy)))
+}
+
+sample_corr(data_df=gdp_numeric)
+```
+
+## We estimate the correlation parameter p with the sample correlation p_hat whose value is 0.305
+
+
+```{r}
+plot(gdp_numeric$polity2, gdp_numeric$gdppercap)
+```
+
+
+
+```{r}
+# Use the same jackknife function from our lecture notes
+jackknife_df = function(samples, est_func) {
+  #'
+  #'Function for performing jackknife estimation for
+  #'row-wise data.frame-valued functions
+  #'
+  #'@param samples data.frame of samples
+  #'@param est_func data.frame-valued function
+  n = dim(samples)[1]
+  jackknife_samps = sapply(
+    # for each index in the sample...
+    1:n,
+    # ...calculate the statistic at all but the current row index
+    function(j) { est_func(samples[-j, ]) }
+  )
+  # calculate the jackknife estimate
+  theta_est = mean(jackknife_samps)
+  # calculate the jackknife variance estimate
+  var_est = ((n-1) / n * sum((jackknife_samps - theta_est)**2))
+  # calculate the jackknife bias estimate
+  bias_est = ((n - 1) * (theta_est - est_func(samples)))
+  # return all three outputs
+  list(theta_est,bias_est,var_est)
+}
+
+# Run jackknife on the given dataset
+res = jackknife_df(samples=gdp_numeric, est_func=sample_corr)
+    
+```
+
+```{r}
+res[[2]]
+```
+
+
+## We calculate the bias of our sample correlation parameter to be 0.0001257 
+
+```{r}
+my_data_perms <- gdp_numeric
+sample_corr_perms <- replicate(n=10000,{
+  # In each permutation, keep EntraceExam the same but permute GPA
+  my_data_perms$gdppercap <- gdp_numeric$gdppercap[sample(1:dim(gdp_numeric)[1])]
+  # Compute sample correlation on the GPA-permuted dataset
+  sample_corr(my_data_perms)
+
+})
+```
+
+
+```{r}
+mean(sample_corr_perms >= sample_corr(data_df=gdp_numeric))
+
+```
+
+```{r}
+sample_corr_boot <- replicate(n=10000,{
+  # Sample with replacement from the given dataset to create the bootstrap dataset
+  my_data_boot <- gdp_numeric[sample(1:dim(gdp_numeric)[1], size=dim(gdp_numeric)[1], replace=TRUE), ]
+  # Compute sample correlation on the GPA-permuted dataset
+  sample_corr(my_data_boot)
+})
+```
+
+```{r}
+c(lower=mean(sample_corr_boot) - 2 * sd(sample_corr_boot),est=mean(sample_corr_boot),upper=mean(sample_corr_boot) + 2 * sd(sample_corr_boot))
+```
+
+# We create a 95% confidence interval for our correlation parameter using non-parametric bootstrap with bounds [0.2840,0.3272]
+
+
+
+```{r}
+c(lower=quantile(sample_corr_boot,probs=0.025),est=quantile(sample_corr_boot,probs=0.5),upper=quantile(sample_corr_boot,probs=0.975))
+```
+
+# Alternative apporach using sample quantiles to find the confidence interval [0.2841, 0.3266] which is close to our CI using non-parametric bootstrap
+
+
+```{r}
+mu = colMeans(gdp_numeric[, -1]); mu
+```
+
+# Calculation of sample mean vector
+
+```{r}
+sigma = cov(gdp_numeric[, -1]); sigma
+```
+
+# Calculation of the sample covariance matrix
+
+
+```{r}
+library(MASS)
+sim_vec <- mvrnorm(10000, mu, sigma)
+sim_mu = colMeans(sim_vec); cbind(mu, sim_mu)
+
+```
+
+```{r}
+sim_sigma = cov(sim_vec); cbind(sigma, sim_sigma)
+```
+
+```{r}
+library(ggplot2)
+ggplot(data=data.frame(x=sim_vec[,1],y=sim_vec[,2]),mapping=aes(x=x,y=y)) +
+  geom_bin2d() + geom_density_2d(color="white") +
+  xlab("Simulated polity2") +
+  ylab("Simulated GDPpercap")
+```
+
+# sample mean vector and sample covariance matrix based on the 10,000 simulated random vectors from bivariate normal distribution compared  with the values of the mu_hat and covariance matrix_hat.
+
+
+## Regression Model testing and evaluation
+
+```{r}
+  
+income_gc <- c("Low income", "High income")
+
+gdp_data1 <- gdpdata %>%
+  filter(incomegroup %in% income_gc)
+
+gdp_data1$incomegroup <- ifelse(gdp_data1$incomegroup == "High income",1,0)
+
+dt = sort(sample(nrow(gdp_data1), nrow(gdp_data1)*.7))
+train<-gdp_data1[dt,]
+test <- gdp_data1[-dt,]
+
+```
+
+```{r}
+set.seed(1)
+train <- sample(2977, 1488)
+
+
+lm.fit <- lm(formula = polity2 ~ gdppercap, data = gdp_data1, subset = train)
+
+attach(gdp_data1)
+mean((polity2 - predict(lm.fit, gdp_data1))[-train]^2)
+```
+
+```{r}
+lm.fit2 <- lm(polity2 ~ poly(gdppercap, 2), data = gdp_data1,subset = train)
+mean((polity2 - predict(lm.fit2, gdp_data1))[-train]^2)
+```
+
+```{r}
+lm.fit3 <- lm(polity2 ~ poly(gdppercap, 3), data = gdp_data1,subset = train)
+mean((polity2 - predict(lm.fit3, gdp_data1))[-train]^2)
+```
+
+```{r}
+lm.fit4 <- lm(polity2 ~ poly(gdppercap, 4), data = gdp_data1,subset = train)
+mean((polity2 - predict(lm.fit4, gdp_data1))[-train]^2)
+```
+
+```{r}
+lm.fit5 <- lm(polity2 ~ poly(gdppercap, 5), data = gdp_data1,subset = train)
+mean((polity2 - predict(lm.fit5, gdp_data1))[-train]^2)
+```
+
+## a model that predicts polity2 using a quartic function of gdppercap performs better than a model that involves up to a cubic function of gdppercap , and there is little evidence in favor of a model that uses a X^5  function of gdppercap.
+
+```{r}
+library(boot)
+glm.fit <- glm(polity2 ~ gdppercap, data = gdp_data1)
+cv.err <- cv.glm(gdp_data1, glm.fit)
+cv.err$delta
+```
+
+## Our cross-validation estimate for the test error is approximately 50.73
+
+
+
+```{r}
+cv.error <- rep(0, 10)
+for (i in 1:10) {
+  glm.fit <- glm(polity2 ~ poly(gdppercap, i), data = gdp_data1)
+  cv.error[i] <- cv.glm(gdp_data1, glm.fit)$delta[1]
+}
+cv.error
+```
